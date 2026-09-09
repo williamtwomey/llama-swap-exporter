@@ -1,0 +1,50 @@
+# llamaswap-exporter — inference metrics for llama-swap.
+#
+# Drop this in as-is, or copy the `llamaswap-exporter:` service block into an
+# existing monitoring compose file (next to node_exporter / dcgm-exporter /
+# device-metrics-exporter, wherever those already live). Nothing else in this
+# file is required. See README.md.
+
+services:
+  llamaswap-exporter:
+    # Builds locally by default. If you run a registry, push the image and
+    # replace `build:` with the pushed reference — pin the tag rather than
+    # using :latest, so a host restart can't silently pick up a different
+    # exporter than the one this config was reasoned about.
+    build: .
+    image: llamaswap-exporter:0.2.0
+    container_name: llamaswap-exporter
+    restart: unless-stopped
+
+    # host networking, deliberately:
+    #   - llama-swap normally runs on the host, not in this compose project, so
+    #     a bridge network would need extra_hosts + host-gateway to reach it;
+    #   - it puts :9820 directly on the host, the same way node_exporter and
+    #     dcgm-exporter usually are, which is what Prometheus expects.
+    # Note that `ports:` is ignored under host networking — EXPORTER_PORT is
+    # what decides the listening port.
+    network_mode: host
+
+    environment:
+      # Point this at whatever port llama-swap listens on for this host. The
+      # exporter always serves 9820 regardless, so the scrape job stays uniform
+      # even across hosts that run llama-swap on different ports.
+      LLAMASWAP_URL: ${LLAMASWAP_URL:-http://127.0.0.1:8080}
+      EXPORTER_PORT: ${EXPORTER_PORT:-9820}
+      POLL_INTERVAL: ${POLL_INTERVAL:-15}
+      # LLAMASWAP_API_KEY: set only if llama-swap is configured with one.
+
+    # Pure JSON poller: no devices, no volumes, no host paths, no GPU access.
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import os,urllib.request;urllib.request.urlopen('http://127.0.0.1:'+os.environ['EXPORTER_PORT']+'/metrics',timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s

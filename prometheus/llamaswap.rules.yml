@@ -1,0 +1,90 @@
+# Alert rules for llamaswap-exporter.
+#
+# Labelled `scope: llamaswap`. Add a matching Alertmanager route if you want
+# these delivered somewhere specific; otherwise they fall through to your
+# default receiver.
+groups:
+  - name: llamaswap
+    rules:
+      - alert: LlamaSwapExporterDown
+        expr: up{job="llamaswap"} == 0
+        for: 10m
+        labels:
+          severity: warning
+          scope: llamaswap
+        annotations:
+          summary: "llamaswap-exporter down on {{ $labels.instance }}"
+          description: "No inference metrics from this host for 10m."
+
+      - alert: LlamaSwapAPIUnreachable
+        expr: llamaswap_up == 0
+        for: 10m
+        labels:
+          severity: warning
+          scope: llamaswap
+        annotations:
+          summary: "llama-swap API unreachable from exporter on {{ $labels.instance }}"
+          description: >-
+            The exporter is up but cannot poll llama-swap. llama-swap itself is
+            probably down, which means inference on this host is down.
+
+      - alert: LlamaSwapActivityRowsLost
+        expr: increase(llamaswap_exporter_rows_lost_total[15m]) > 0
+        for: 15m
+        labels:
+          severity: info
+          scope: llamaswap
+        annotations:
+          summary: "llamaswap-exporter is missing requests on {{ $labels.instance }}"
+          description: >-
+            The 1000-row activity buffer lapped between polls, so token counters
+            are undercounting. Lower POLL_INTERVAL on this host.
+
+      - alert: LlamaSwapModelThrashing
+        expr: >-
+          sum by (instance) (changes(llamaswap_model_loaded[30m])) > 20
+        for: 30m
+        labels:
+          severity: warning
+          scope: llamaswap
+        annotations:
+          summary: "Model swap thrashing on {{ $labels.instance }}"
+          description: >-
+            More than 20 load/unload transitions in 30m. Every swap is a full
+            model reload from disk; this is the failure mode that quietly
+            destroys throughput without showing up as an error anywhere.
+
+      - alert: LlamaSwapSlotsSaturated
+        expr: >-
+          llamaswap_slots_busy / clamp_min(llamaswap_slots_total, 1) >= 1
+        for: 20m
+        labels:
+          severity: info
+          scope: llamaswap
+        annotations:
+          summary: "{{ $labels.model }} has every slot busy on {{ $labels.instance }}"
+          description: >-
+            All parallel slots have been in use for 20m, so requests are
+            queueing behind them. -np is the bottleneck here, not the GPU —
+            raising it costs context per slot, so check
+            llamaswap_slot_context_size_tokens before changing it.
+
+      - alert: LlamaSwapGenerationSlow
+        expr: >-
+          histogram_quantile(
+            0.5,
+            sum by (le, model, instance) (
+              rate(llamaswap_generation_tokens_per_second_bucket[1h])
+            )
+          ) < 5
+          and
+          sum by (model, instance) (rate(llamaswap_requests_total[1h])) > 0
+        for: 1h
+        labels:
+          severity: info
+          scope: llamaswap
+        annotations:
+          summary: "{{ $labels.model }} generating below 5 tok/s on {{ $labels.instance }}"
+          description: >-
+            Median generation speed has been under 5 tok/s for an hour. Usually
+            means a model spilled out of VRAM into system RAM.

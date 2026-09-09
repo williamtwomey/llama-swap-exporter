@@ -1,0 +1,10 @@
+# Add to prometheus.yml, alongside your existing exporter jobs.
+#
+# Every host serves the exporter on 9820 regardless of which port llama-swap
+# itself uses there, so this job stays uniform across a mixed fleet.
+  - job_name: "llamaswap"
+    scrape_interval: 15s
+    static_configs:
+      - targets:
+          - "llama-host-1:9820"
+          - "llama-host-2:9820"
